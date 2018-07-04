@@ -1,6 +1,15 @@
 const ENV = process.env;
 const AWS = require('aws-sdk');
+if (!AWS.config.region) {
+    AWS.config.update({
+        region: 'eu-west-1'
+    });
+}
+
 const JiraClient = require('jira-connector');
+const cwl = new AWS.CloudWatchLogs();
+const EventLogsLimit = 20;
+const EventLogWindowMillis = 5 * 60000; // 5mins
 
 console.log('Loading sns2jira function');
 
@@ -8,6 +17,7 @@ if (!ENV.JIRA_HOST) throw new Error(`Missing environment variable: JIRA_HOST`);
 if (!ENV.JIRA_USERNAME) throw new Error(`Missing environment variable: JIRA_USERNAME`);
 if (!ENV.JIRA_PASSWORD) throw new Error(`Missing environment variable: JIRA_PASSWORD`);
 if (!ENV.JIRA_PROJECT) throw new Error(`Missing environment variable: JIRA_PROJECT`);
+
 
 let jira = new JiraClient({
     host: ENV.JIRA_HOST,
@@ -24,8 +34,8 @@ function buildJiraMessage(alarm) {
             project: {
                 key: ENV.JIRA_PROJECT
             },
-            summary: alarm.AlarmName,
-            description: `${alarm.AlarmDescription} - ${alarm.NewStateValue}\n${alarm.NewStateReason}\nTrigger: {code:javascript}${JSON.stringify(alarm.Trigger, null, 4)}{code}`,
+            summary: `CloudWatch Alarm: ${alarm.AlarmName}`,
+            description: `h3. ${alarm.NewStateValue} ${alarm.AlarmDescription || ""}\n${alarm.StateChangeTime}\n${alarm.NewStateReason}\nh3. Trigger: {code:javascript}${JSON.stringify(alarm.Trigger, null, 4)}{code}\n`,
             environment: alarm.Region,
             issuetype: {
                 name: "Alert"
@@ -33,6 +43,77 @@ function buildJiraMessage(alarm) {
         }
     };
 }
+
+/**
+ * Function obtains the filter pattern for a metric filter and searches for related event logs to add to the JIRA
+ *
+ * @param params params for a describeMetricFilters such as { metricNamespace: "", metricName: ""),
+ *  see https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/CloudWatchLogs.html#describeMetricFilters-property
+ * @param callback a function (err, data) where data is a json object of the events returned in the search
+ * @param alarmDateTime a date and time to search, of no value is provided the current runtime date and time is used
+ */
+function obtainLogsForAlarm(params, callback, alarmDateTime) {
+
+    console.log(`addLogsForAlarm: ${JSON.stringify(params)}`);
+    cwl.describeMetricFilters(params, (e, describeResult) => {
+
+        console.log(`Describe Result: ${JSON.stringify(describeResult)}`);
+
+        if (e) {
+            callback(e);
+        } else if (describeResult.metricFilters && describeResult.metricFilters.length < 1) {
+            callback(null, []);
+        } else if (describeResult.metricFilters && describeResult.metricFilters.length > 1) {
+            callback(`Expecting single metric filter, received: ${describeResult.metricFilters.length} filter`);
+        } else {
+
+            let adt = alarmDateTime || new Date().getTime();
+            // console.log(`adt: ${adt}`);
+            let filter = describeResult.metricFilters[0];
+            let filterParams = {
+                logGroupName: filter.logGroupName,
+                startTime: adt - EventLogWindowMillis,
+                endTime: adt,
+                filterPattern: filter.filterPattern,
+                limit: EventLogsLimit
+            };
+
+            // console.log(`Using filter ${filter.filterPattern}`);
+            // console.log("Filter Params: " + JSON.stringify(filterParams, null, "  "));
+
+            cwl.filterLogEvents(filterParams, (err, data) => {
+                if (data) {
+                    callback(null, data.events);
+                } else if(err) {
+                    callback(err);
+                } else {
+                    callback(null, []);
+                }
+            })
+        }
+    });
+}
+
+function renderEvent(e) {
+    if (e) {
+        let dt = new Date(e.timestamp);
+        let msg = e.message;
+        if (msg.startsWith("{")) {
+            let json = JSON.parse(msg);
+            msg = `*${json.errorCode || ""}* ${json.errorMessage || ""}`;
+        }
+        return `| ${dt.toISOString()} | ${msg} |`;
+    } else return "";
+}
+
+/**
+ *
+ * @param {Array} events
+ */
+function appendToJiraDesription(events) {
+    return events.map(e => renderEvent(e)).join("\n");
+}
+
 
 /**
  *
@@ -46,17 +127,41 @@ function parseSNSMessage(msg) {
 function processEvent(event, context, callback) {
     console.log('Event:', JSON.stringify(event, null, 2));
     const snsMessage = parseSNSMessage(event.Records[0].Sns.Message);
-    const jiraIssue = buildJiraMessage(snsMessage);
-    jira.issue.createIssue(jiraIssue, function (err, issue) {
+    const params = {
+            metricNamespace: snsMessage.Trigger.Namespace,
+            metricName: snsMessage.Trigger.MetricName
+        };
+
+    console.log(JSON.stringify(params));
+
+    function createJira(suffix) {
+        const jiraIssue = buildJiraMessage(snsMessage);
+        jiraIssue.fields.description = jiraIssue.fields.description + suffix;
+        jira.issue.createIssue(jiraIssue, function (err, issue) {
+            if (err) {
+                console.log(err);
+                callback(err);
+            } else {
+                console.log(JSON.stringify(issue, null, "   "));
+                callback(null, `Created issue ${issue.self}`);
+            }
+
+        });
+    }
+
+    obtainLogsForAlarm(params, (err, logs) => {
         if (err) {
             console.log(err);
-            callback(err);
+            createJira(`h3. Associated Logs\nUnable to locate logs: {quote}${err}{quote}`);
         } else {
-            console.log(JSON.stringify(issue, null, "   "));
-            callback(null, `Created issue ${issue.self}`);
+            let table = appendToJiraDesription(logs);
+            createJira(`h3. Associated Logs\n${table}`);
         }
+    }, new Date(snsMessage.StateChangeTime).getTime());
 
-    });
+
+
+
 }
 
 

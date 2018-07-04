@@ -10,6 +10,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "aws-sdk": "^2.267.1",
     "jira-connector": "^2.8.0"
   },
   "devDependencies": {
