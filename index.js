@@ -1,8 +1,9 @@
 const ENV = process.env;
 const AWS = require('aws-sdk');
+const REGION = 'eu-west-1';
 if (!AWS.config.region) {
     AWS.config.update({
-        region: 'eu-west-1'
+        region: REGION
     });
 }
 
@@ -83,11 +84,11 @@ function obtainLogsForAlarm(params, callback, alarmDateTime) {
 
             cwl.filterLogEvents(filterParams, (err, data) => {
                 if (data) {
-                    callback(null, data.events);
+                    callback(null, data.events, filterParams);
                 } else if(err) {
                     callback(err);
                 } else {
-                    callback(null, []);
+                    callback(null, [], filterParams);
                 }
             })
         }
@@ -100,9 +101,9 @@ function renderEvent(e) {
         let msg = e.message;
         if (msg.startsWith("{")) {
             let json = JSON.parse(msg);
-            msg = `*${json.errorCode || ""}* ${json.errorMessage || ""}`;
+            msg = `_${json.errorCode || ""}_ ${json.errorMessage || ""}`;
         }
-        return `| ${dt.toISOString()} | ${msg} |`;
+        return `| ${e.eventSource} | ${e.eventName} | ${dt.toISOString()} | ${msg} |`;
     } else return "";
 }
 
@@ -111,7 +112,8 @@ function renderEvent(e) {
  * @param {Array} events
  */
 function appendToJiraDesription(events) {
-    return events.map(e => renderEvent(e)).join("\n");
+    let rows = events.map(e => renderEvent(e)).join("\n");
+    return `|| Event Source || Event Name || Event Time || Error Message ||\n${rows}`;
 }
 
 
@@ -125,12 +127,14 @@ function parseSNSMessage(msg) {
 }
 
 function processEvent(event, context, callback) {
+
     console.log('Event:', JSON.stringify(event, null, 2));
     const snsMessage = parseSNSMessage(event.Records[0].Sns.Message);
     const params = {
             metricNamespace: snsMessage.Trigger.Namespace,
             metricName: snsMessage.Trigger.MetricName
         };
+    const dt = new Date(snsMessage.StateChangeTime).getTime();
 
     console.log(JSON.stringify(params));
 
@@ -149,15 +153,16 @@ function processEvent(event, context, callback) {
         });
     }
 
-    obtainLogsForAlarm(params, (err, logs) => {
+    obtainLogsForAlarm(params, (err, logs, filterParams) => {
         if (err) {
             console.log(err);
             createJira(`h3. Associated Logs\nUnable to locate logs: {quote}${err}{quote}`);
         } else {
             let table = appendToJiraDesription(logs);
-            createJira(`h3. Associated Logs\n${table}`);
+            let logLink = `https://${REGION}.console.aws.amazon.com/cloudwatch/home?region=${REGION}#logEventViewer:group=${filterParams.logGroupName};filter=${encodeURIComponent(filterParams.filterPattern)};start=${new Date(filterParams.startTime)};end=${new Date(filterParams.endTime)}`;
+            createJira(`h3. Associated Logs\n${table}\n[CloudWatch Logs|${logLink}]`);
         }
-    }, new Date(snsMessage.StateChangeTime).getTime());
+    }, dt);
 
 
 
