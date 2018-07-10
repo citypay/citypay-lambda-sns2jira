@@ -98,12 +98,16 @@ function obtainLogsForAlarm(params, callback, alarmDateTime) {
 function renderEvent(e) {
     if (e) {
         let dt = new Date(e.timestamp);
+        let src = "";
+        let name = "";
         let msg = e.message;
         if (msg.startsWith("{")) {
             let json = JSON.parse(msg);
             msg = `_${json.errorCode || ""}_ ${json.errorMessage || ""}`;
+            src = json.eventSource;
+            name = json.eventName;
         }
-        return `| ${e.eventSource} | ${e.eventName} | ${dt.toISOString()} | ${msg} |`;
+        return `| ${e.userIdentity.userName} | ${src} | ${name} | ${dt.toISOString()} | ${msg} |`;
     } else return "";
 }
 
@@ -113,7 +117,7 @@ function renderEvent(e) {
  */
 function appendToJiraDesription(events) {
     let rows = events.map(e => renderEvent(e)).join("\n");
-    return `|| Event Source || Event Name || Event Time || Error Message ||\n${rows}`;
+    return `|| User || Event Source || Event Name || Event Time || Error Message ||\n${rows}`;
 }
 
 
@@ -159,7 +163,7 @@ function processEvent(event, context, callback) {
             createJira(`h3. Associated Logs\nUnable to locate logs: {quote}${err}{quote}`);
         } else {
             let table = appendToJiraDesription(logs);
-            let logLink = `https://${REGION}.console.aws.amazon.com/cloudwatch/home?region=${REGION}#logEventViewer:group=${filterParams.logGroupName};filter=${encodeURIComponent(filterParams.filterPattern)};start=${new Date(filterParams.startTime)};end=${new Date(filterParams.endTime)}`;
+            let logLink = `https://${REGION}.console.aws.amazon.com/cloudwatch/home?region=${REGION}#logEventViewer:group=${filterParams.logGroupName};filter=${encodeURIComponent(filterParams.filterPattern)};start=${new Date(filterParams.startTime).toISOString()};end=${new Date(filterParams.endTime).toISOString()}`;
             createJira(`h3. Associated Logs\n${table}\n[CloudWatch Logs|${logLink}]`);
         }
     }, dt);
