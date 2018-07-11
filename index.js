@@ -85,7 +85,7 @@ function obtainLogsForAlarm(params, callback, alarmDateTime) {
             cwl.filterLogEvents(filterParams, (err, data) => {
                 if (data) {
                     callback(null, data.events, filterParams);
-                } else if(err) {
+                } else if (err) {
                     callback(err);
                 } else {
                     callback(null, [], filterParams);
@@ -135,9 +135,9 @@ function processEvent(event, context, callback) {
     console.log('Event:', JSON.stringify(event, null, 2));
     const snsMessage = parseSNSMessage(event.Records[0].Sns.Message);
     const params = {
-            metricNamespace: snsMessage.Trigger.Namespace,
-            metricName: snsMessage.Trigger.MetricName
-        };
+        metricNamespace: snsMessage.Trigger.Namespace,
+        metricName: snsMessage.Trigger.MetricName
+    };
     const dt = new Date(snsMessage.StateChangeTime).getTime();
 
     console.log(JSON.stringify(params));
@@ -163,12 +163,13 @@ function processEvent(event, context, callback) {
             createJira(`h3. Associated Logs\nUnable to locate logs: {quote}${err}{quote}`);
         } else {
             let table = appendToJiraDesription(logs);
-            let logLink = `https://${REGION}.console.aws.amazon.com/cloudwatch/home?region=${REGION}#logEventViewer:group=${filterParams.logGroupName};filter=${encodeURIComponent(filterParams.filterPattern)};start=${new Date(filterParams.startTime).toISOString()};end=${new Date(filterParams.endTime).toISOString()}`;
+            let logLink = "";
+            if (filterParams) {
+                logLink = `https://${REGION}.console.aws.amazon.com/cloudwatch/home?region=${REGION}#logEventViewer:group=${filterParams.logGroupName};filter=${encodeURIComponent(filterParams.filterPattern)};start=${new Date(filterParams.startTime).toISOString()};end=${new Date(filterParams.endTime).toISOString()}`;
+            }
             createJira(`h3. Associated Logs\n${table}\n[CloudWatch Logs|${logLink}]`);
         }
     }, dt);
-
-
 
 
 }
