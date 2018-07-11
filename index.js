@@ -101,13 +101,14 @@ function renderEvent(e) {
         let src = "";
         let name = "";
         let msg = e.message;
+        let userName = e.userIdentity ? e.userIdentity.userName : "";
         if (msg.startsWith("{")) {
             let json = JSON.parse(msg);
             msg = `_${json.errorCode || ""}_ ${json.errorMessage || ""}`;
             src = json.eventSource;
             name = json.eventName;
         }
-        return `| ${e.userIdentity.userName} | ${src} | ${name} | ${dt.toISOString()} | ${msg} |`;
+        return `| ${userName} | ${src} | ${name} | ${dt.toISOString()} | ${msg} |`;
     } else return "";
 }
 
